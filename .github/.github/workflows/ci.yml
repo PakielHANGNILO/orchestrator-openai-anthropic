@@ -1,0 +1,33 @@
+  - name: Build Docker image
+    run: docker build -t orchestrator:ci .
+
+  - name: Run container (detached)
+    run: |
+      docker run -d --rm -p 8000:8000 --name orchestrator_ci orchestrator:ci || true
+      # give a bit more time for startup
+      sleep 8
+
+  - name: Wait for health (retry)
+    run: |
+      set -e
+      ok=1
+      for i in $(seq 1 30); do
+        if curl -sSf http://localhost:8000/health >/dev/null 2>&1; then
+          echo "health ok after $i attempts"
+          ok=0
+          break
+        fi
+        echo "waiting for service... ($i/30)"
+        sleep 2
+      done
+      if [ $ok -ne 0 ]; then
+        echo "health check failed after retries"
+        exit 1
+      fi
+
+  - name: Stop container and show logs
+    if: always()
+    run: |
+      echo "Container logs (last 200 lines):"
+      docker logs --tail 200 orchestrator_ci || true
+      docker stop orchestrator_ci || true
