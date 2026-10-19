@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Build Docker image
+        run: docker build -t orchestrator:ci .
+
+      - name: Run container
+        run: |
+          docker run -d --rm -p 8000:8000 --name orchestrator_ci orchestrator:ci
+          # wait for server to start a few seconds
+          sleep 4
+
+      - name: Smoke test /health
+        run: |
+          for i in {1..12}; do
+            if curl -sSf http://localhost:8000/health >/dev/null 2>&1; then echo "health ok"; exit 0; fi
+            echo "waiting..."; sleep 1
+          done
+          echo "health endpoint not responding"; exit 1
+
+      - name: Stop container
+        run: docker stop orchestrator_ci || true
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ghcr.io/${{ github.repository }}:latest
