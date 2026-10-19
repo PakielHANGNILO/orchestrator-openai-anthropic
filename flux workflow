@@ -13,33 +13,43 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
 
       - name: Build Docker image
         run: docker build -t orchestrator:ci .
 
-      - name: Run container
+      - name: Run container (detached)
         run: |
-          docker run -d --rm -p 8000:8000 --name orchestrator_ci orchestrator:ci
-          # wait for server to start a few seconds
-          sleep 4
+          docker run -d --rm -p 8000:8000 --name orchestrator_ci orchestrator:ci || true
+          # give a bit more time for startup
+          sleep 8
 
-      - name: Smoke test /health
+      - name: Wait for health (retry)
         run: |
-          for i in {1..12}; do
-            if curl -sSf http://localhost:8000/health >/dev/null 2>&1; then echo "health ok"; exit 0; fi
-            echo "waiting..."; sleep 1
+          set -e
+          ok=1
+          for i in $(seq 1 30); do
+            if curl -sSf http://localhost:8000/health >/dev/null 2>&1; then
+              echo "health ok after $i attempts"
+              ok=0
+              break
+            fi
+            echo "waiting for service... ($i/30)"
+            sleep 2
           done
-          echo "health endpoint not responding"; exit 1
+          if [ $ok -ne 0 ]; then
+            echo "health check failed after retries"
+            exit 1
+          fi
 
-      - name: Stop container
-        run: docker stop orchestrator_ci || true
+      - name: Stop container and show logs
+        if: always()
+        run: |
+          echo "Container logs (last 200 lines):"
+          docker logs --tail 200 orchestrator_ci || true
+          docker stop orchestrator_ci || true
 
   publish:
     needs: test
